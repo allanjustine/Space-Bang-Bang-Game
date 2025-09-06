@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Space Bang-Bang</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        background: black;
+        margin: 0;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        margin: auto;
+        background: #111;
+        border: 3px solid #22d3ee;
+      }
+      /* Modal background */
+      #scoreboardModalBg {
+        background: rgba(0, 0, 0, 0.8);
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  </head>
+  <body
+    class="flex flex-col items-center justify-center min-h-screen space-y-4 text-white relative"
+  >
+    <!-- Start Screen -->
+    <div
+      id="startScreen"
+      class="absolute top-0 left-0 w-full h-full bg-black bg-opacity-90 flex flex-col items-center justify-center z-20"
+    >
+      <h1 class="text-3xl font-bold mb-4 text-teal-400">Enter Player Name</h1>
+      <form
+        onsubmit="return handleStart(event)"
+        class="flex flex-col items-center space-y-3"
+      >
+        <input
+          id="spaceBangBangPlayerName"
+          type="text"
+          placeholder="Your name"
+          class="px-4 py-2 rounded text-black"
+          required
+          minlength="2"
+        />
+        <button
+          type="submit"
+          class="bg-teal-400 hover:bg-teal-500 text-black font-bold py-2 px-6 rounded"
+        >
+          Start Game
+        </button>
+        <p id="errorMsg" class="text-red-500 text-sm hidden">
+          Invalid name. No spaces. At least 2 letters.
+        </p>
+      </form>
+    </div>
+
+    <!-- Scoreboard -->
+    <div
+      id="scoreboard"
+      class="flex justify-between w-[500px] text-lg font-bold px-2"
+    >
+      <div id="scoreText">Score: 0</div>
+      <div id="highestScoreText">Highest: 0</div>
+      <div id="livesText">❤️: 3</div>
+      <button
+        id="showScoresBtn"
+        class="bg-teal-400 hover:bg-teal-500 text-black font-bold py-1 px-3 rounded"
+        title="Show Scoreboard"
+      >
+        Show Scoreboard
+      </button>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas" width="500" height="600"></canvas>
+
+    <!-- Game Over Overlay -->
+    <div
+      id="gameOverScreen"
+      class="absolute top-0 left-0 w-full h-full bg-black bg-opacity-80 flex flex-col items-center justify-center hidden z-10"
+    >
+      <h1 class="text-4xl text-red-500 font-bold mb-2">GAME OVER</h1>
+      <p id="gameOverMessage" class="text-teal-400 text-xl mb-6"></p>
+      <button
+        onclick="restartGame()"
+        class="bg-teal-400 hover:bg-teal-500 text-black font-bold py-2 px-6 rounded"
+      >
+        Restart
+      </button>
+    </div>
+
+    <!-- Scoreboard Modal -->
+    <div
+      id="scoreboardModalBg"
+      class="fixed inset-0 hidden items-center justify-center z-30"
+    >
+      <div
+        id="scoreboardModal"
+        class="bg-black text-white rounded-lg max-w-md w-full max-h-[80vh] overflow-y-auto p-6 shadow-lg"
+      >
+        <h2 class="text-2xl font-bold mb-4 text-teal-400 text-center">
+          Scoreboard
+        </h2>
+        <ul
+          id="scoreboardList"
+          class="space-y-2 h-[450px] overflow-y-auto p-5"
+        ></ul>
+        <button
+          onclick="closeScoreboard()"
+          class="mt-6 bg-teal-400 hover:bg-teal-500 text-black font-bold py-2 px-6 rounded block mx-auto"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      const scoreText = document.getElementById("scoreText");
+      const livesText = document.getElementById("livesText");
+      const highestScoreText = document.getElementById("highestScoreText");
+      const gameOverScreen = document.getElementById("gameOverScreen");
+      const gameOverMessage = document.getElementById("gameOverMessage");
+      const startScreen = document.getElementById("startScreen");
+      const errorMsg = document.getElementById("errorMsg");
+      const showScoresBtn = document.getElementById("showScoresBtn");
+      const scoreboardModalBg = document.getElementById("scoreboardModalBg");
+      const scoreboardList = document.getElementById("scoreboardList");
+
+      // Game state
+      let ship, bullets, zombies, score, lives, gameOver;
+      let zombieSpawnRate = 1500;
+      let zombieSpawner;
+
+      // Player info
+      let playerName = null;
+      let highestScore = 0;
+
+      // Scores storage key
+      const SCORES_STORAGE_KEY = "spaceBangBangScores";
+
+      // Load scores object from localStorage
+      function loadScores() {
+        const scoresStr = localStorage.getItem(SCORES_STORAGE_KEY);
+        return scoresStr ? JSON.parse(scoresStr) : {};
+      }
+
+      // Save scores object to localStorage
+      function saveScores(scores) {
+        localStorage.setItem(SCORES_STORAGE_KEY, JSON.stringify(scores));
+      }
+
+      // Update the current player's highest score in storage if needed
+      function updatePlayerHighestScore(newScore) {
+        let scores = loadScores();
+        if (!scores[playerName] || newScore > scores[playerName]) {
+          scores[playerName] = newScore;
+          saveScores(scores);
+        }
+      }
+
+      // Get highest score for current player from storage
+      function getPlayerHighestScore() {
+        const scores = loadScores();
+        return scores[playerName] || 0;
+      }
+
+      // Show scoreboard modal with all players and their highest scores
+      async function showScoreboard() {
+        scoreboardList.innerHTML = "";
+        const scores = loadScores();
+        // Convert to array and sort descending by score
+        const response = await axios.get(
+          "https://flappybird-server.smctgroup.ph/space/scoreboard"
+        );
+        const sortedScores = response.data.data;
+        if (sortedScores.length === 0) {
+          scoreboardList.innerHTML =
+            "<li class='text-center font-bold text-gray-400 text-xl'>No scores yet.</li>";
+        } else {
+          sortedScores.forEach((entry, index) => {
+            const li = document.createElement("li");
+
+            let gifStyle = "";
+            if (index === 0) {
+              gifStyle =
+                "background-image: url('https://media.tenor.com/2Jcp2gPh78oAAAAi/crown-joypixels.gif'); width: 50px; height: 50px;";
+            } else if (index === 1) {
+              gifStyle =
+                "background-image: url('https://media.tenor.com/2TITZ_dguLQAAAAi/princess-tiara.gif'); width: 50px; height: 50px;";
+            } else if (index === 2) {
+              gifStyle =
+                "background-image: url('https://media.tenor.com/69Akk5XvEeMAAAAi/queen.gif'); width: 50px; height: 50px;";
+            } else if (index === 3) {
+              gifStyle =
+                "background-image: url('https://media.tenor.com/c4Bw2bvsu-YAAAAi/crown-gold.gif'); width: 50px; height: 50px;";
+            }
+
+            li.innerHTML = `
+                <div class="flex justify-between items-center w-full gap-12">
+                    <div class="flex items-center gap-2.5">
+                        <div class="bg-no-repeat bg-contain bg-center" style="${gifStyle}"></div>
+                        <div class="flex flex-col space-y-0.5">
+                            <span class="name text-gray-200 font-bold text-xl">${entry.player_name}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <h1 class="text-sky-400 font-bold text-4xl">${entry.score}</h1>
+                    </div>
+                </div>
+            `;
+
+            scoreboardList.appendChild(li);
+          });
+        }
+        scoreboardModalBg.classList.remove("hidden");
+        scoreboardModalBg.classList.add("flex");
+      }
+
+      function closeScoreboard() {
+        scoreboardModalBg.classList.add("hidden");
+        scoreboardModalBg.classList.remove("flex");
+      }
+
+      // Validate player name
+      function isValidName(name) {
+        return name.trim().length > 2;
+      }
+
+      // Handle game start form submit
+      function handleStart(e) {
+        e.preventDefault();
+        const nameInput = document.getElementById("spaceBangBangPlayerName");
+        const name = nameInput.value.trim();
+
+        if (!isValidName(name)) {
+          errorMsg.classList.remove("hidden");
+          return false;
+        }
+
+        playerName = name;
+        localStorage.setItem("spaceBangBangPlayerName", playerName);
+        highestScore = getPlayerHighestScore();
+        highestScoreText.textContent = "Highest: " + highestScore;
+
+        startScreen.classList.add("hidden");
+        initGame();
+        gameLoop();
+        return false;
+      }
+
+      // Initialize game state
+      function initGame() {
+        ship = {
+          x: canvas.width / 2 - 25,
+          y: canvas.height - 60,
+          w: 50,
+          h: 40,
+        };
+        bullets = [];
+        zombies = [];
+        score = 0;
+        lives = 3;
+        gameOver = false;
+        gameOverMessage.textContent = "";
+
+        updateUI();
+        startZombieSpawner();
+      }
+
+      // Update UI elements (score, lives, highest)
+      function updateUI() {
+        scoreText.textContent = "Score: " + score;
+        livesText.textContent = "❤️: " + lives;
+        highestScoreText.textContent = "Highest: " + highestScore;
+      }
+
+      // Restart game after game over
+      function restartGame() {
+        gameOverScreen.classList.add("hidden");
+        initGame();
+      }
+
+      // Start spawning zombies at intervals
+      function startZombieSpawner() {
+        clearInterval(zombieSpawner);
+        zombieSpawner = setInterval(() => {
+          if (!gameOver) spawnZombie();
+        }, zombieSpawnRate);
+      }
+
+      // Shoot bullets from ship
+      function shoot() {
+        if (!gameOver) {
+          bullets.push({
+            x: ship.x + ship.w / 2 - 3,
+            y: ship.y,
+            w: 6,
+            h: 12,
+            speed: 10,
+          });
+        }
+      }
+
+      // Spawn a new zombie enemy
+      function spawnZombie() {
+        let size = 40;
+        zombies.push({
+          x: Math.random() * (canvas.width - size),
+          y: -size,
+          w: size,
+          h: size,
+          speed: 2 + Math.random() * 2 + score * 0.02,
+        });
+      }
+
+      // Mouse / touch controls
+      let dragging = false;
+
+      canvas.addEventListener("mousedown", (e) => {
+        dragging = true;
+        shoot();
+      });
+      canvas.addEventListener("mouseup", () => (dragging = false));
+
+      canvas.addEventListener("mousemove", (e) => {
+        if (dragging) {
+          let rect = canvas.getBoundingClientRect();
+          let mouseX = e.clientX - rect.left;
+          ship.x = mouseX - ship.w / 2;
+          ship.x = Math.max(0, Math.min(canvas.width - ship.w, ship.x));
+        }
+      });
+
+      canvas.addEventListener("touchstart", (e) => {
+        dragging = true;
+        shoot();
+      });
+      canvas.addEventListener("touchend", () => (dragging = false));
+      canvas.addEventListener("touchmove", (e) => {
+        if (dragging) {
+          let rect = canvas.getBoundingClientRect();
+          let touchX = e.touches[0].clientX - rect.left;
+          ship.x = touchX - ship.w / 2;
+          ship.x = Math.max(0, Math.min(canvas.width - ship.w, ship.x));
+        }
+      });
+
+      // Adjust zombie spawn rate based on score
+      function updateDifficulty() {
+        if (score >= 150) zombieSpawnRate = 400;
+        else if (score >= 100) zombieSpawnRate = 600;
+        else if (score >= 50) zombieSpawnRate = 900;
+        else if (score >= 20) zombieSpawnRate = 1200;
+        startZombieSpawner();
+      }
+
+      const submitScore = async (data) => {
+        await axios.post(
+          "https://flappybird-server.smctgroup.ph/space/submit-score",
+          data
+        );
+      };
+
+      // Update game state each frame
+      function update() {
+        if (gameOver) return;
+
+        bullets.forEach((b, i) => {
+          b.y -= b.speed;
+          if (b.y + b.h < 0) bullets.splice(i, 1);
+        });
+
+        zombies.forEach((z, i) => {
+          z.y += z.speed;
+          if (z.y + z.h >= canvas.height) {
+            zombies.splice(i, 1);
+            lives--;
+            updateUI();
+            if (lives <= 0) {
+              gameOver = true;
+              const prevHighest = getPlayerHighestScore();
+              updatePlayerHighestScore(score);
+              highestScore = getPlayerHighestScore();
+              highestScoreText.textContent = "Highest: " + highestScore;
+
+              let message = `Your Score: ${score}<br>Highest Score: ${highestScore}`;
+              if (score > prevHighest) {
+                message += "<br>🎉 New Highest Score!";
+                submitScore({ player_name: playerName, score });
+              }
+              gameOverMessage.innerHTML = message;
+              gameOverScreen.classList.remove("hidden");
+            }
+          }
+        });
+
+        bullets.forEach((b, bi) => {
+          zombies.forEach((z, zi) => {
+            if (
+              b.x < z.x + z.w &&
+              b.x + b.w > z.x &&
+              b.y < z.y + z.h &&
+              b.h + b.y > z.y
+            ) {
+              bullets.splice(bi, 1);
+              zombies.splice(zi, 1);
+              score++;
+              updateUI();
+              updateDifficulty();
+            }
+          });
+        });
+      }
+
+      // Draw ship
+      function drawShip() {
+        ctx.fillStyle = "#22d3ee";
+        ctx.beginPath();
+        ctx.moveTo(ship.x + ship.w / 2, ship.y);
+        ctx.lineTo(ship.x, ship.y + ship.h);
+        ctx.lineTo(ship.x + ship.w, ship.y + ship.h);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#0ea5e9";
+        ctx.fillRect(ship.x + ship.w / 2 - 6, ship.y + 8, 12, 10);
+      }
+
+      // Draw a zombie
+      function drawZombie(z) {
+        ctx.fillStyle = "#991b1b";
+        ctx.beginPath();
+        ctx.moveTo(z.x + z.w / 2, z.y);
+        ctx.lineTo(z.x, z.y + z.h);
+        ctx.lineTo(z.x + z.w, z.y + z.h);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#84cc16";
+        ctx.beginPath();
+        ctx.arc(z.x + z.w / 2, z.y + z.h / 2, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw all game elements
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawShip();
+
+        ctx.fillStyle = "#facc15";
+        bullets.forEach((b) => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+        zombies.forEach((z) => drawZombie(z));
+      }
+
+      // Main game loop
+      function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // On page load: check if playerName is stored, hide startScreen if yes
+      const storedName = localStorage.getItem("spaceBangBangPlayerName");
+      if (storedName && isValidName(storedName)) {
+        playerName = storedName;
+        highestScore = getPlayerHighestScore();
+        highestScoreText.textContent = "Highest: " + highestScore;
+        startScreen.classList.add("hidden");
+        initGame();
+        gameLoop();
+      } else {
+        startScreen.classList.remove("hidden");
+        document.getElementById("spaceBangBangPlayerName").focus();
+      }
+
+      // Show scoreboard modal when button clicked
+      showScoresBtn.addEventListener("click", showScoreboard);
+
+      // Close scoreboard modal on click outside modal box
+      scoreboardModalBg.addEventListener("click", (e) => {
+        if (e.target === scoreboardModalBg) {
+          closeScoreboard();
+        }
+      });
+    </script>
+  </body>
+</html>
